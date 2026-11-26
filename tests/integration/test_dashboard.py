@@ -74,6 +74,11 @@ class DashboardTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def _status_links(self, body):
+        start = body.index('<p class="status-links">')
+        end = body.index("</p>", start)
+        return body[start:end]
+
     def test_ac8_list_page_shows_task_and_auto_refresh(self):
         response, body = self.request("GET", "/")
         self.assertEqual(response.status, 200)
@@ -319,6 +324,29 @@ class DashboardTest(unittest.TestCase):
         _, blank_body = self.request("GET", "/?status=")
         self.assertEqual(blank_body, self.request("GET", "/")[1])
         self.assertIn("failed task", blank_body)
+
+    def test_list_page_has_all_status_links(self):
+        response, body = self.request("GET", "/")
+        self.assertEqual(response.status, 200)
+        links = self._status_links(body)
+        self.assertEqual(links.count("<a href="), 8)
+        self.assertIn('href="/"', links)
+        for status in db.ALL_STATUSES:
+            self.assertIn(f'href="/?status={status}"', links)
+
+    def test_failed_filter_keeps_status_links_and_only_failed_tasks(self):
+        self._seed_status_task("F", "failed task", "failed")
+        self._seed_status_task("R", "ready task", "ready")
+
+        response, body = self.request("GET", "/?status=failed")
+        self.assertEqual(response.status, 200)
+        links = self._status_links(body)
+        self.assertEqual(links.count("<a href="), 8)
+        self.assertIn('href="/?status=failed"', links)
+        self.assertIn("failed task", body)
+        self.assertNotIn("ready task", body)
+        self.assertNotIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
+        self.assertEqual(body.count('<a href="/tasks/'), 1)
 
 
 if __name__ == "__main__":

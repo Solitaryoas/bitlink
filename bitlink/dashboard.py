@@ -74,6 +74,14 @@ def _page(title, body):
 
 
 def render_list_html(tasks):
+    status_links = " ".join(
+        ['<a href="/">全部</a>']
+        + [
+            f'<a href="/?status={quote(status, safe="")}">{html.escape(status)}</a>'
+            for status in db.ALL_STATUSES
+        ]
+    )
+    links = f'<p class="status-links">{status_links}</p>'
     if not tasks:
         body = '<p class="muted">（没有任务）</p>'
     else:
@@ -97,6 +105,7 @@ def render_list_html(tasks):
                 "</tr>"
             )
         body = f"<table>{head}{''.join(rows)}</table>"
+    body = links + body
     body += (
         '<p class="muted">'
         f'共 {len(tasks)} 个任务 · 每 {REFRESH_SECONDS} 秒自动刷新 · '
