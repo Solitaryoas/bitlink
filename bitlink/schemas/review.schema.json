@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BitLink review result",
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "reject"]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string" },
+          "message": { "type": "string" }
+        },
+        "required": ["severity", "message"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "reason", "findings"],
+  "additionalProperties": false
+}
