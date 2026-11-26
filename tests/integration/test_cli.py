@@ -74,6 +74,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], card_id)
         self.assertEqual(rows[0]["status"], "ready")
+        self.assertEqual(rows[0]["blocked_by"], [])
 
     def test_add_invalid_card_returns_2_and_writes_nothing(self):
         path = self.write_cards([{"title": "缺验收标准", "description": "d"}])
@@ -265,6 +266,16 @@ class CliTest(unittest.TestCase):
         )
         result = run_cli(["add", "--file", path], self.repo_path, self.data_dir)
         self.assertEqual(result.returncode, 0, result.stderr)
+        result = run_cli(["list", "--json"], self.repo_path, self.data_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout)
+        dependent = next(row for row in rows if row["blocked_by"] == [first])
+        self.assertIsInstance(dependent["blocked_by"], list)
+
+        result = run_cli(["show", dependent["id"], "--json"], self.repo_path, self.data_dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        shown = json.loads(result.stdout)
+        self.assertEqual(shown["blocked_by"], [first])
 
     def test_cancel_ready_task_returns_0_and_records_event(self):
         """退出码 0 的 cancel 分支此前只有失败分支（4）被覆盖。

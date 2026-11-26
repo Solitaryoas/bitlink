@@ -166,7 +166,25 @@ def migrate(conn):
 
 
 def _row_to_dict(row):
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    payload = dict(row)
+    if "blocked_by" in payload:
+        payload["blocked_by"] = decode_blocked_by(payload["blocked_by"])
+    return payload
+
+
+def decode_blocked_by(value):
+    """把 tasks.blocked_by 的 JSON 文本解码为数组；已是数组则原样返回。"""
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value:
+        return []
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return decoded if isinstance(decoded, list) else []
 
 
 class Repository:
@@ -282,7 +300,7 @@ class Repository:
                 )
                 if cursor.rowcount != 1:
                     continue
-                task = dict(
+                task = _row_to_dict(
                     self.conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
                 )
                 attempt_no = task["attempt_count"]
@@ -404,7 +422,7 @@ class Repository:
                 rows = self.conn.execute(
                     "SELECT * FROM tasks ORDER BY created_at, id"
                 ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_dict(row) for row in rows]
 
     def list_attempts(self, task_id):
         with self._lock:

@@ -107,6 +107,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(response.status, 200)
         payload = json.loads(body)
         self.assertEqual(payload["acceptance"], "验收标准文本")
+        self.assertEqual(payload["blocked_by"], [])
         self.assertEqual(len(payload["attempts"]), 1)
         self.assertEqual(payload["attempts"][0]["review_verdict"], "pass")
 
