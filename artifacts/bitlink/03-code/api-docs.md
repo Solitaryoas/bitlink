@@ -69,7 +69,7 @@
 - 用途：单任务详情 JSON，含任务卡全部字段与全部尝试记录。
 - 权限：无。
 - 请求：路径参数 `id`，需 URL 编码。
-- 响应：`200`，`application/json; charset=utf-8`。顶层为 `tasks` 表整行：`id`、`title`、`description`、`acceptance`、`status`、`blocked_by`（JSON 数组字符串）、`attempt_count`、`max_attempts`、`timeout_seconds`、`block_reason`、`branch`、`worktree_path`、`created_at`、`updated_at`；附加字段 `attempts` 为数组，按 `attempt_no` 升序。
+- 响应：`200`，`application/json; charset=utf-8`。顶层为 `tasks` 表整行：`id`、`title`、`description`、`acceptance`、`status`、`blocked_by`（字符串数组）、`attempt_count`、`max_attempts`、`timeout_seconds`、`block_reason`、`branch`、`worktree_path`、`created_at`、`updated_at`；附加字段 `attempts` 为数组，按 `attempt_no` 升序。
 
   ```json
   {
@@ -78,7 +78,7 @@
     "description": "只读看板冒烟",
     "acceptance": "列表里能看到这张卡",
     "status": "done",
-    "blocked_by": "[]",
+    "blocked_by": [],
     "attempt_count": 1,
     "max_attempts": 3,
     "timeout_seconds": null,

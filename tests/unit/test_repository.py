@@ -49,7 +49,22 @@ class RepositoryTest(unittest.TestCase):
         tasks = self.repo.list_tasks()
         self.assertEqual([t["id"] for t in tasks], ["t1", "t2"])
         self.assertEqual(tasks[0]["status"], "ready")
-        self.assertEqual(json.loads(tasks[1]["blocked_by"]), ["t1"])
+        self.assertEqual(tasks[0]["blocked_by"], [])
+        self.assertEqual(tasks[1]["blocked_by"], ["t1"])
+
+    def test_read_boundaries_decode_blocked_by_to_list(self):
+        self.repo.create_cards([card("t1"), card("t2", blocked_by=["t1"])])
+
+        tasks = {task["id"]: task for task in self.repo.list_tasks()}
+        self.assertEqual(tasks["t1"]["blocked_by"], [])
+        self.assertEqual(tasks["t2"]["blocked_by"], ["t1"])
+        self.assertIsInstance(tasks["t1"]["blocked_by"], list)
+        self.assertIsInstance(tasks["t2"]["blocked_by"], list)
+
+        self.assertEqual(self.repo.get_task("t1")["blocked_by"], [])
+        self.assertEqual(self.repo.get_task("t2")["blocked_by"], ["t1"])
+        self.assertIsInstance(self.repo.get_task("t2")["blocked_by"], list)
+        self.assertEqual(self.repo.show_task("t2")["blocked_by"], ["t1"])
 
     def test_transition_honours_expected_status(self):
         self.repo.create_cards([card("t1")])

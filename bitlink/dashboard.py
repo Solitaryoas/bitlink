@@ -51,6 +51,7 @@ def task_detail(conn, task_id):
     if row is None:
         return None
     detail = dict(row)
+    detail["blocked_by"] = db.decode_blocked_by(detail["blocked_by"])
     detail["attempts"] = [
         dict(attempt)
         for attempt in conn.execute(
@@ -109,7 +110,7 @@ def render_detail_html(task):
         ("标题", task["title"]),
         ("状态", task["status"]),
         ("attempts", f"{task['attempt_count']}/{task['max_attempts']}"),
-        ("blocked_by", task["blocked_by"]),
+        ("blocked_by", json.dumps(task["blocked_by"], ensure_ascii=False)),
         ("block_reason", task["block_reason"] or ""),
         ("分支", task["branch"] or ""),
         ("worktree", task["worktree_path"] or ""),

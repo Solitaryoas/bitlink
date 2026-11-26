@@ -269,7 +269,7 @@ class Daemon:
         for task in tasks.values():
             if task["status"] != db.STATUS_READY:
                 continue
-            for dependency_id in json.loads(task["blocked_by"] or "[]"):
+            for dependency_id in task["blocked_by"]:
                 dependency = tasks.get(dependency_id)
                 if dependency is None:
                     reason = f"dependency:{dependency_id}:missing"
