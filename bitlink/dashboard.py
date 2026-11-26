@@ -8,7 +8,7 @@ import html
 import json
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from bitlink import db
 
@@ -162,12 +162,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
-        path = unquote(urlparse(self.path).path)
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
+        status_values = parse_qs(parsed.query, keep_blank_values=True).get("status")
+        status = status_values[0] if status_values else None
         try:
             if path == "/":
-                return self._render_list()
+                return self._render_list(status)
             if path == "/api/tasks":
-                return self._render_list_json()
+                return self._render_list_json(status)
             if path.startswith("/api/tasks/"):
                 return self._render_detail_json(path[len("/api/tasks/") :])
             if path.startswith("/tasks/"):
@@ -190,18 +193,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     # --- renderers ------------------------------------------------------
 
-    def _render_list(self):
+    def _render_list(self, status=None):
         conn = _open_readonly(self.server.data_dir)
         try:
-            tasks = list_tasks(conn)
+            tasks = list_tasks(conn, status)
         finally:
             conn.close()
         self._send(200, "text/html; charset=utf-8", render_list_html(tasks))
 
-    def _render_list_json(self):
+    def _render_list_json(self, status=None):
         conn = _open_readonly(self.server.data_dir)
         try:
-            tasks = list_tasks(conn)
+            tasks = list_tasks(conn, status)
         finally:
             conn.close()
         self._send_json(200, {"tasks": tasks})

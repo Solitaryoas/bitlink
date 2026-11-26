@@ -241,6 +241,85 @@ class DashboardTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def _seed_status_task(self, task_id, title, final_status):
+        self.repo.create_cards(
+            [
+                {
+                    "id": task_id,
+                    "title": title,
+                    "description": "d",
+                    "acceptance": "a",
+                    "blocked_by": [],
+                    "max_attempts": 3,
+                    "timeout_seconds": None,
+                }
+            ]
+        )
+        if final_status == "ready":
+            return
+        self.repo.claim_ready(1)
+        self.repo.transition(task_id, ["running"], final_status)
+
+    def test_list_api_status_filter_with_value(self):
+        self._seed_status_task("F", "failed task", "failed")
+
+        response, body = self.request("GET", "/api/tasks?status=failed")
+        self.assertEqual(response.status, 200)
+        tasks = json.loads(body)["tasks"]
+        self.assertEqual([task["id"] for task in tasks], ["F"])
+        for task in tasks:
+            self.assertEqual(task["status"], "failed")
+
+    def test_list_api_status_filter_unknown_value_returns_empty(self):
+        self._seed_status_task("F", "failed task", "failed")
+
+        response, body = self.request("GET", "/api/tasks?status=not-a-status")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(body), {"tasks": []})
+        self.assertEqual(body, '{"tasks": []}')
+
+    def test_list_api_status_blank_equals_unfiltered(self):
+        self._seed_status_task("F", "failed task", "failed")
+
+        _, plain_body = self.request("GET", "/api/tasks")
+        response, blank_body = self.request("GET", "/api/tasks?status=")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            sorted(task["id"] for task in json.loads(blank_body)["tasks"]),
+            sorted(task["id"] for task in json.loads(plain_body)["tasks"]),
+        )
+
+    def test_list_api_status_absent_returns_every_task(self):
+        self._seed_status_task("F", "failed task", "failed")
+        self._seed_status_task("R", "ready task", "ready")
+
+        response, body = self.request("GET", "/api/tasks")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(
+            sorted(task["id"] for task in json.loads(body)["tasks"]), ["F", "R", "T"]
+        )
+
+    def test_html_list_status_filter_with_value(self):
+        self._seed_status_task("F", "failed task", "failed")
+        self._seed_status_task("R", "ready task", "ready")
+
+        response, body = self.request("GET", "/?status=failed")
+        self.assertEqual(response.status, 200)
+        self.assertIn("failed task", body)
+        self.assertNotIn("ready task", body)
+        self.assertNotIn(SCRIPT_TITLE.replace("<", "&lt;").replace(">", "&gt;"), body)
+
+    def test_html_list_status_unknown_and_blank(self):
+        self._seed_status_task("F", "failed task", "failed")
+
+        response, body = self.request("GET", "/?status=not-a-status")
+        self.assertEqual(response.status, 200)
+        self.assertNotIn("failed task", body)
+
+        _, blank_body = self.request("GET", "/?status=")
+        self.assertEqual(blank_body, self.request("GET", "/")[1])
+        self.assertIn("failed task", blank_body)
+
 
 if __name__ == "__main__":
     unittest.main()
