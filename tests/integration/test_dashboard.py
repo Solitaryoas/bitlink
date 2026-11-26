@@ -200,6 +200,47 @@ class DashboardTest(unittest.TestCase):
         self.assertNotIn("http://", body)
         self.assertNotIn("https://", body)
 
+    def test_list_tasks_status_filter(self):
+        self.repo.create_cards(
+            [
+                {
+                    "id": "F",
+                    "title": "failed task",
+                    "description": "d",
+                    "acceptance": "a",
+                    "blocked_by": [],
+                    "max_attempts": 3,
+                    "timeout_seconds": None,
+                }
+            ]
+        )
+        self.repo.claim_ready(1)
+        self.repo.transition("F", ["running"], "failed")
+        self.repo.create_cards(
+            [
+                {
+                    "id": "R",
+                    "title": "ready task",
+                    "description": "d",
+                    "acceptance": "a",
+                    "blocked_by": [],
+                    "max_attempts": 3,
+                    "timeout_seconds": None,
+                }
+            ]
+        )
+
+        conn = dashboard._open_readonly(self.data_dir)
+        try:
+            self.assertEqual(conn.execute("PRAGMA query_only").fetchone()[0], 1)
+            self.assertEqual(len(dashboard.list_tasks(conn)), 3)
+            self.assertEqual(len(dashboard.list_tasks(conn, "")), 3)
+            self.assertEqual([task["id"] for task in dashboard.list_tasks(conn, "failed")], ["F"])
+            self.assertEqual([task["id"] for task in dashboard.list_tasks(conn, "done")], ["T"])
+            self.assertEqual(dashboard.list_tasks(conn, "not-a-status"), [])
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
