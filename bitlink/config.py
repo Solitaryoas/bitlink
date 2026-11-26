@@ -19,6 +19,8 @@ DEFAULTS = {
     # bypass（隔离只靠 worktree）或 service（沙箱启用，但产物可能不可读）。
     "exec": {"model": None, "windows_sandbox": None},
     "review": {"model": None, "windows_sandbox": "service"},
+    # 规划只读、不改文件，默认走沙箱；超时给 5 分钟，够读文件清单再拆卡
+    "plan": {"model": None, "timeout_seconds": 300},
     "dashboard": {"port": 8787},
 }
 

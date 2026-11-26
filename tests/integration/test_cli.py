@@ -11,9 +11,11 @@ from bitlink import db
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def run_cli(args, project_path, data_dir, timeout=None):
+def run_cli(args, project_path, data_dir, timeout=None, extra_env=None):
     env = os.environ.copy()
     env["PYTHONPATH"] = PROJECT_ROOT + os.pathsep + env.get("PYTHONPATH", "")
+    if extra_env:
+        env.update(extra_env)
     command = [
         sys.executable,
         "-m",
@@ -310,6 +312,119 @@ class CliTest(unittest.TestCase):
             self.assertEqual(repo.get_task(card_id)["status"], "ready")
         finally:
             repo.close()
+
+    def _fake_planner_env(self, body):
+        """造一个假 codex：把 body 写进 -o 指定的文件。"""
+        script = os.path.join(self.data_dir, "fake_planner.py")
+        with open(script, "w", encoding="utf-8") as handle:
+            handle.write(
+                "import sys\n"
+                "args = sys.argv[1:]\n"
+                "out = args[args.index('-o') + 1]\n"
+                "print('{\"type\":\"thread.started\",\"thread_id\":\"s1\"}')\n"
+                "open(out, 'w', encoding='utf-8').write(" + repr(body) + ")\n"
+            )
+        return {"BITLINK_CODEX": json.dumps([sys.executable, script])}
+
+    def test_plan_writes_draft_and_keeps_queue_empty(self):
+        body = json.dumps(
+            {
+                "cards": [
+                    {
+                        "key": "T1",
+                        "title": "加登录失败计数",
+                        "description": "限制连续失败次数",
+                        "acceptance": "python3 -m unittest discover -s tests",
+                    }
+                ]
+            }
+        )
+        out = os.path.join(self.data_dir, "plans", "draft.json")
+        result = run_cli(
+            ["plan", "--request", "给登录加失败次数限制", "--out", out, "--json"],
+            self.repo_path,
+            self.data_dir,
+            extra_env=self._fake_planner_env(body),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(len(payload["cards"]), 1)
+        self.assertTrue(os.path.isfile(out))
+        self.assertTrue(payload["cards"][0]["acceptance"].startswith("python3"))
+        repo = self.repository()
+        try:
+            self.assertEqual(repo.list_tasks(), [])
+        finally:
+            repo.close()
+
+    def test_plan_apply_inserts_cards(self):
+        body = json.dumps(
+            {
+                "cards": [
+                    {"key": "T1", "title": "A", "description": "d", "acceptance": "跑测试"},
+                    {
+                        "key": "T2",
+                        "title": "B",
+                        "description": "d",
+                        "acceptance": "跑测试",
+                        "blocked_by": ["T1"],
+                    },
+                ]
+            }
+        )
+        result = run_cli(
+            ["plan", "--request", "两件事", "--apply", "--json"],
+            self.repo_path,
+            self.data_dir,
+            extra_env=self._fake_planner_env(body),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        ids = json.loads(result.stdout)["ids"]
+        self.assertEqual(len(ids), 2)
+        repo = self.repository()
+        try:
+            tasks = {task["id"]: task for task in repo.list_tasks()}
+            self.assertEqual(set(tasks), set(ids))
+            self.assertEqual(tasks[ids[1]]["blocked_by"], [ids[0]])
+        finally:
+            repo.close()
+
+    def test_plan_rejects_unknown_dependency(self):
+        body = json.dumps(
+            {
+                "cards": [
+                    {
+                        "key": "T1",
+                        "title": "A",
+                        "description": "d",
+                        "acceptance": "跑测试",
+                        "blocked_by": ["T9"],
+                    }
+                ]
+            }
+        )
+        result = run_cli(
+            ["plan", "--request", "x", "--apply"],
+            self.repo_path,
+            self.data_dir,
+            extra_env=self._fake_planner_env(body),
+        )
+        self.assertEqual(result.returncode, 2)
+        repo = self.repository()
+        try:
+            self.assertEqual(repo.list_tasks(), [])
+        finally:
+            repo.close()
+
+    def test_plan_requires_request_text(self):
+        result = run_cli(["plan"], self.repo_path, self.data_dir)
+        self.assertEqual(result.returncode, 2)
+
+    def test_plan_rejects_both_request_and_file(self):
+        result = run_cli(
+            ["plan", "--request", "x", "--file", "y.txt"], self.repo_path, self.data_dir
+        )
+        self.assertEqual(result.returncode, 2)
 
     def test_daemon_with_held_lock_returns_3(self):
         """第二个 daemon 实例必须退出码 3，而不是进入调度循环。

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BitLinkPlan",
+  "type": "object",
+  "required": ["cards"],
+  "additionalProperties": false,
+  "properties": {
+    "cards": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["key", "title", "description", "acceptance"],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "计划内唯一的短标识，如 T1、T2；blocked_by 用它引用"
+          },
+          "title": { "type": "string", "description": "一句话说明这张卡要做什么" },
+          "description": {
+            "type": "string",
+            "description": "执行者需要知道的范围、边界和不要做的事"
+          },
+          "acceptance": {
+            "type": "string",
+            "description": "可执行的验收标准：命令、可观察行为或具体断言"
+          },
+          "blocked_by": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "必须先完成的卡 key，或已存在的任务 id"
+          },
+          "max_attempts": { "type": "integer", "minimum": 1, "maximum": 5 }
+        }
+      }
+    }
+  }
+}

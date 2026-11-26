@@ -6,11 +6,14 @@
 import argparse
 import json
 import os
+import shlex
 import sys
+import time
 
 from bitlink import cards as cards_module
 from bitlink import config as config_module
 from bitlink import db
+from bitlink import planner as planner_module
 
 EXIT_OK = 0
 EXIT_INPUT = 2
@@ -20,6 +23,7 @@ EXIT_STATE = 4
 COMMANDS = (
     "init",
     "add",
+    "plan",
     "list",
     "show",
     "cancel",
@@ -76,6 +80,15 @@ def build_parser():
         _add_common(sub, suppress_defaults=True)
         if name == "add":
             sub.add_argument("--file", required=True, help="任务卡 JSON 文件")
+        if name == "plan":
+            sub.add_argument("--request", default=None, help="需求文本")
+            sub.add_argument("--file", default=None, help="从文件读取需求文本")
+            sub.add_argument("--out", default=None, help="草稿输出路径，默认写进 <data-dir>/plans/")
+            sub.add_argument(
+                "--apply",
+                action="store_true",
+                help="校验通过后直接入队；不加时只出草稿，不动数据库",
+            )
         if name == "list":
             sub.add_argument("--status", default=None)
         if name in ("show", "cancel", "retry", "approve"):
@@ -166,6 +179,92 @@ def cmd_add(args):
     else:
         for task_id in ids:
             print(task_id)
+    return EXIT_OK
+
+
+def _codex_command():
+    """规划器用的 codex 可执行文件；BITLINK_CODEX 可覆盖（JSON 数组或命令字符串）。"""
+    raw = os.environ.get("BITLINK_CODEX")
+    if not raw:
+        return "codex"
+    if raw.strip().startswith("["):
+        return json.loads(raw)
+    return shlex.split(raw)
+
+
+def cmd_plan(args):
+    """把一段需求拆成任务卡草稿；默认只写文件，--apply 才入队。"""
+    if args.request and args.file:
+        raise CliError(EXIT_INPUT, "--request 与 --file 只能选一个")
+    request = args.request
+    if args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8-sig") as handle:
+                request = handle.read()
+        except OSError as exc:
+            raise CliError(EXIT_ENV, f"无法读取需求文件：{args.file}（{exc}）") from exc
+    if not request or not request.strip():
+        raise CliError(EXIT_INPUT, "缺少需求文本：用 --request 或 --file 提供")
+
+    config, repo = _open_repository(args)
+    try:
+        existing = repo.list_tasks()
+    finally:
+        repo.close()
+    existing_ids = {task["id"] for task in existing}
+    existing_titles = [task["title"] for task in existing]
+
+    plan_config = config.get("plan") or {}
+    planner = planner_module.Planner(
+        executable=_codex_command(),
+        project_root=config["project_root"],
+        model=plan_config.get("model"),
+    )
+    plans_dir = os.path.join(config["data_dir"], "plans")
+    out_path = args.out or os.path.join(plans_dir, f"{time.strftime('%Y%m%d-%H%M%S')}.json")
+    raw_path = os.path.splitext(out_path)[0] + ".raw.json"
+
+    result = planner.plan(
+        request,
+        out_path,
+        raw_path,
+        plan_config.get("timeout_seconds") or 300,
+        existing_ids=existing_ids,
+        existing_titles=existing_titles,
+    )
+    cards = result["cards"]
+
+    ids = None
+    if args.apply:
+        config, repo = _open_repository(args)
+        try:
+            ids = repo.create_cards(cards)
+        finally:
+            repo.close()
+
+    if _is_json(args):
+        payload = {
+            "draft_path": result["draft_path"],
+            "raw_path": result["raw_path"],
+            "warnings": result["warnings"],
+            "cards": cards,
+        }
+        if ids is not None:
+            payload["ids"] = ids
+        _print_json(payload)
+        return EXIT_OK
+
+    print(f"计划草稿：{result['draft_path']}")
+    print(f"{'id':<10}{'依赖':<20}title")
+    for card in cards:
+        print(f"{card['id'][:8]:<10}{str(len(card['blocked_by'])) + ' 个':<20}{card['title']}")
+    for warning in result["warnings"]:
+        print(f"注意：{warning}")
+    if ids is None:
+        print(f"\n确认无误后入队：bitlink add --file \"{result['draft_path']}\"")
+        print("或直接重跑并加 --apply。")
+    else:
+        print("\n已入队：" + " ".join(ids))
     return EXIT_OK
 
 
@@ -319,6 +418,7 @@ def cmd_dashboard(args):
 HANDLERS = {
     "init": cmd_init,
     "add": cmd_add,
+    "plan": cmd_plan,
     "list": cmd_list,
     "show": cmd_show,
     "cancel": cmd_cancel,
@@ -342,6 +442,9 @@ def main(argv=None):
         print(f"错误：{exc}", file=sys.stderr)
         return EXIT_ENV
     except cards_module.CardError as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        return EXIT_INPUT
+    except planner_module.PlanError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return EXIT_INPUT
     except KeyboardInterrupt:
