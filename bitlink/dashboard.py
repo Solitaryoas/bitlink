@@ -21,6 +21,7 @@ SELECT t.id, t.title, t.status, t.attempt_count, t.max_attempts,
          WHERE a.task_id = t.id AND a.report_summary IS NOT NULL
          ORDER BY a.attempt_no DESC LIMIT 1) AS report_summary
 FROM tasks t
+WHERE :status IS NULL OR :status = '' OR t.status = :status
 ORDER BY t.updated_at DESC, t.created_at
 """
 
@@ -41,8 +42,8 @@ def _open_readonly(data_dir):
     return db.connect(data_dir, readonly=True)
 
 
-def list_tasks(conn):
-    rows = conn.execute(_LIST_SQL).fetchall()
+def list_tasks(conn, status=None):
+    rows = conn.execute(_LIST_SQL, {"status": status}).fetchall()
     return [dict(row) for row in rows]
 
 
