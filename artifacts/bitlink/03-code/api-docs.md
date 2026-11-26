@@ -4,6 +4,8 @@
 
 新增本机只读看板 HTTP 接口 4 个：`GET /`、`GET /tasks/<id>`、`GET /api/tasks`、`GET /api/tasks/<id>`。全部为新增，无修改或删除；没有外部调用方，不涉及旧版本兼容。服务由 `bitlink dashboard` 独立进程启动，默认绑定 `127.0.0.1:8787`。每个请求用只读 SQLite（`mode=ro`）连接渲染页面与 JSON，不提供任何写接口；只读连接打开失败直接返回 `500`，不会回退到读写连接。
 
+本次为列表补充 `status` 查询参数：`GET /` 与 `GET /api/tasks` 均支持按状态精确匹配，合法值为 `ready/running/review/done/failed/blocked/cancelled`；未知值返回 `200` 空列表，缺省或 `status=` 等于不过滤。列表页顶部同时新增“全部 + 7 个状态”链接行，点击状态链接跳转到 `/?status=<status>`。本次仅新增参数解析与页面链接，未改变只读实现、5 秒刷新、错误码与响应格式。
+
 ## 通用约定
 
 - 协议：HTTP/1.1，仅 `GET`。`POST`、`PUT`、`PATCH`、`DELETE` 一律返回 `405`，响应头带 `Allow: GET`。`/api/*` 的 405 响应体为 JSON `{"error": "method not allowed", "allow": "GET"}`；页面路径的 405 为纯文本 `405 Method Not Allowed`。
@@ -22,8 +24,8 @@
 
 - 用途：任务列表页，展示 id、标题、状态、attempts、最近一次报告摘要、block_reason、updated_at。
 - 权限：无。
-- 请求：无路径参数、无查询参数、无请求体。
-- 响应：`200`，`text/html; charset=utf-8`。表格列固定为 `id`、`标题`、`状态`、`attempts`（显示为 `attempt_count/max_attempts`）、`最近报告摘要`、`block_reason`、`updated_at`；`id` 链到 `/tasks/<id>`；页脚显示任务总数与刷新周期。
+- 请求：无路径参数；可选查询参数 `status`，按任务状态精确匹配，合法值为 `ready/running/review/done/failed/blocked/cancelled`；未知值返回 `200` 空列表；缺省或 `status=` 等于不过滤；无请求体。
+- 响应：`200`，`text/html; charset=utf-8`。表格前有 `<p class="status-links">` 链接行，即“全部 + 7 个状态”共 8 条链接：`全部` 指向 `/`，每个状态指向 `/?status=<status>`（如 `/?status=failed`），点击后为按该状态过滤的列表页。表格列固定为 `id`、`标题`、`状态`、`attempts`（显示为 `attempt_count/max_attempts`）、`最近报告摘要`、`block_reason`、`updated_at`；`id` 链到 `/tasks/<id>`；页脚显示任务总数与刷新周期。
 - 错误：数据库读取异常返回 `500` 纯文本；非法方法返回 `405`。
 - 兼容性：新增页面，无既有调用方。
 
@@ -40,7 +42,7 @@
 
 - 用途：任务列表 JSON，供脚本或后续前端消费。
 - 权限：无。
-- 请求：无参数。
+- 请求：无路径参数；可选查询参数 `status`，按任务状态精确匹配，合法值为 `ready/running/review/done/failed/blocked/cancelled`；未知值返回 `200` 空列表 `{"tasks": []}`；缺省或 `status=` 等于不过滤；无请求体。
 - 响应：`200`，`application/json; charset=utf-8`，对象含唯一字段 `tasks`，数组按 `updated_at` 倒序。
 
   ```json
@@ -116,4 +118,4 @@
 
 ## 与测试的对应关系
 
-`tests/integration/test_dashboard.py` 分别请求 `/`、`/tasks/T`、`/api/tasks`、`/api/tasks/T`，并断言 `200`、列表页含 `content="5"`、详情页含 review 理由与日志路径、`POST /` 返回 `405` 纯文本、`POST /api/tasks` 返回 JSON 405、未知路径与未知任务返回 `404`、标题里的 `<script>` 被转义为 `&lt;script&gt;`、页面不含 `http://`/`https://` 外链；`test_readonly_connection_is_query_only` 与 `test_dashboard_open_readonly_rejects_insert` 直接尝试 `INSERT`/`UPDATE`，断言只读连接抛 `sqlite3.OperationalError`；`test_list_api_survives_daemon_closing_database` 断言 daemon 正常关闭数据库后看板仍能返回列表；`test_readonly_open_failure_returns_500_without_write_fallback` 断言只读连接打开失败直接 `500`、不回退读写连接。
+`tests/integration/test_dashboard.py` 分别请求 `/`、`/tasks/T`、`/api/tasks`、`/api/tasks/T`，并断言 `200`、列表页含 `content="5"`、详情页含 review 理由与日志路径、`POST /` 返回 `405` 纯文本、`POST /api/tasks` 返回 JSON 405、未知路径与未知任务返回 `404`、标题里的 `<script>` 被转义为 `&lt;script&gt;`、页面不含 `http://`/`https://` 外链；`test_readonly_connection_is_query_only` 与 `test_dashboard_open_readonly_rejects_insert` 直接尝试 `INSERT`/`UPDATE`，断言只读连接抛 `sqlite3.OperationalError`；`test_list_api_survives_daemon_closing_database` 断言 daemon 正常关闭数据库后看板仍能返回列表；`test_readonly_open_failure_returns_500_without_write_fallback` 断言只读连接打开失败直接 `500`、不回退读写连接。本次参数解析由 `test_list_tasks_status_filter`、`test_list_api_status_filter_with_value`、`test_list_api_status_filter_unknown_value_returns_empty`、`test_list_api_status_blank_equals_unfiltered`、`test_list_api_status_absent_returns_every_task` 覆盖，另有 `test_html_list_status_filter_with_value`、`test_html_list_status_unknown_and_blank` 覆盖页面过滤；链接测试 `test_list_page_has_all_status_links` 与 `test_failed_filter_keeps_status_links_and_only_failed_tasks` 断言链接行共 8 条链接（`全部` 的 `href="/"` 加 7 个 `href="/?status=<status>"`）。
