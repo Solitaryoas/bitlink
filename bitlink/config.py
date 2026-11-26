@@ -21,6 +21,9 @@ DEFAULTS = {
     "review": {"model": None, "windows_sandbox": "service"},
     # 规划只读、不改文件，默认走沙箱；超时给 5 分钟，够读文件清单再拆卡
     "plan": {"model": None, "timeout_seconds": 300},
+    # 新建 worktree 后执行的初始化命令（如 npm ci）。worktree 里没有被
+    # .gitignore 忽略的依赖目录，不装依赖 agent 跑不了构建和测试。
+    "worktree": {"setup_command": None, "setup_timeout_seconds": 900},
     "dashboard": {"port": 8787},
 }
 

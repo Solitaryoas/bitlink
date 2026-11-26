@@ -76,13 +76,18 @@ def commit_worktree(worktree_path, message):
     raise WorktreeError(f"提交任务分支失败：{detail}", reason="commit_failed")
 
 
-def ensure_worktree(project_root, task_id, base_ref, worktrees_dir, data_dir=None):
+def ensure_worktree(
+    project_root, task_id, base_ref, worktrees_dir, data_dir=None, on_create=None
+):
     """返回 worktree 路径；目录已存在则复用，否则新建分支与 workspace。
 
     复用前查两件事：
     1. 数据目录里的运行标记：pid 仍存活说明另一个进程（强杀后残留的 codex）
        还在写这个目录，判 worktree_in_use；pid 已死或标记缺失则清掉残留标记。
     2. `git status`：目录存在但不是这个仓库的 worktree 时同样判 worktree_in_use。
+
+    `on_create` 只在本次新建了 worktree 时调用，用于执行依赖安装等初始化命令；
+    复用旧 worktree 不会重复执行。
     """
     path = os.path.abspath(os.path.join(worktrees_dir, task_id))
     resolved_data_dir = data_dir or os.path.dirname(os.path.abspath(worktrees_dir))
@@ -120,6 +125,8 @@ def ensure_worktree(project_root, task_id, base_ref, worktrees_dir, data_dir=Non
         raise WorktreeError(
             f"git worktree add 失败（{branch}）：{(completed.stderr or completed.stdout).strip()}"
         )
+    if on_create is not None:
+        on_create(path)
     return path
 
 

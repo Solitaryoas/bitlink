@@ -129,6 +129,48 @@ class DaemonTest(unittest.TestCase):
         with self.assertRaises(config_module.ConfigError):
             instance.run()
 
+    def test_worktree_setup_command_runs_once_on_create(self):
+        """新建 worktree 后执行 setup_command；复用同一 worktree 时不重复执行。
+
+        防的回归：JS 项目在 worktree 里没有 node_modules，不装依赖就无法构建、
+        无法验收，任务必然空转。
+        """
+        self.repo.create_cards([card("T")])
+        executed = []
+
+        def setup(path, attempt_dir):
+            executed.append(path)
+
+        instance = self.make_daemon(
+            FakeExecutor(), max_iterations=1, worktree={"setup_command": "echo ok"}
+        )
+        instance._setup_worktree = setup  # 只验证调用时机，不真的跑命令
+        instance.run()
+
+        self.assertEqual(len(executed), 1)
+        self.assertTrue(os.path.isdir(executed[0]))
+
+        # 复用：把任务放回 ready 再跑一次，worktree 已存在，不应再次初始化
+        self.repo.transition("T", ["done"], "ready")
+        again = self.make_daemon(
+            FakeExecutor(), max_iterations=1, worktree={"setup_command": "echo ok"}
+        )
+        again._setup_worktree = setup
+        again.run()
+        self.assertEqual(len(executed), 1)
+
+    def test_worktree_setup_failure_fails_task(self):
+        self.repo.create_cards([card("T")])
+        instance = self.make_daemon(
+            FakeExecutor(),
+            max_iterations=1,
+            worktree={"setup_command": "exit 3"},
+        )
+        instance.run()
+        task = self.repo.get_task("T")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["block_reason"], "worktree_setup_failed")
+
     def test_dependent_task_starts_from_dependency_commit(self):
         """依赖完成后，下游卡的 worktree 必须包含上游改动，diff 只含自己的改动。
 

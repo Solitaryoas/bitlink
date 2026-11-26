@@ -6,6 +6,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -320,6 +321,7 @@ class Daemon:
                 base_commit,
                 self.worktrees_dir,
                 data_dir=self.data_dir,
+                on_create=lambda path: self._setup_worktree(path, attempt_dir),
             )
         except worktree.WorktreeError as exc:
             self._fail(task_id, attempt_no, exc.reason, str(exc))
@@ -333,6 +335,36 @@ class Daemon:
         finally:
             # 只清自己的标记：exec/review 子进程会把标记改成自己的 pid 并在退出时删除。
             running.clear_marker(self.data_dir, task_id, pid=os.getpid())
+
+    def _setup_worktree(self, worktree_path, attempt_dir):
+        """新建 worktree 后执行初始化命令（装依赖等）；失败转 setup 失败。"""
+        settings = self.config.get("worktree") or {}
+        command = settings.get("setup_command")
+        if not command:
+            return
+        os.makedirs(attempt_dir, exist_ok=True)
+        log_path = os.path.join(attempt_dir, "setup.log")
+        timeout_seconds = settings.get("setup_timeout_seconds") or 900
+        with open(log_path, "wb") as handle:
+            try:
+                completed = subprocess.run(
+                    command,
+                    shell=True,
+                    cwd=worktree_path,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise worktree.WorktreeError(
+                    f"worktree 初始化超时（{timeout_seconds} 秒）：{command}，详见 {log_path}",
+                    reason="worktree_setup_failed",
+                ) from exc
+        if completed.returncode != 0:
+            raise worktree.WorktreeError(
+                f"worktree 初始化命令失败（退出码 {completed.returncode}）：{command}，详见 {log_path}",
+                reason="worktree_setup_failed",
+            )
 
     def _execute_attempt(self, task_id, attempt_no, attempt_dir, worktree_path, base_commit):
         changed = self.repo.transition(
