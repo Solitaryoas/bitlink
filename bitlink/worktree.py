@@ -29,6 +29,53 @@ def branch_name(task_id):
     return f"bitlink/{task_id}"
 
 
+def _is_ancestor(project_root, ancestor, descendant):
+    if ancestor == descendant:
+        return True
+    return (
+        _git(["merge-base", "--is-ancestor", ancestor, descendant], project_root).returncode == 0
+    )
+
+
+def resolve_chain_base(project_root, base_ref, dependency_ids):
+    """依赖链的起点提交：取能包含其他候选的那个分支 tip。
+
+    依赖任务的改动会提交到它自己的 bitlink/<id> 分支上，所以被依赖的卡应该
+    从依赖分支的最新提交起算，否则每张卡都会从同一个 base 重做一遍前置改动。
+    依赖互相分叉（没有一个分支包含其他全部）时宁可失败也不猜。
+    """
+    if not dependency_ids:
+        return base_ref
+    candidates = [base_ref]
+    for dependency_id in dependency_ids:
+        tip = _git(
+            ["rev-parse", "--verify", "--quiet", branch_name(dependency_id)], project_root
+        )
+        if tip.returncode == 0 and tip.stdout.strip():
+            candidates.append(tip.stdout.strip())
+    for candidate in candidates:
+        if all(_is_ancestor(project_root, other, candidate) for other in candidates):
+            return candidate
+    raise WorktreeError(
+        "依赖分支互相分叉，无法确定叠加起点：" + ", ".join(dependency_ids),
+        reason="chain_diverged",
+    )
+
+
+def commit_worktree(worktree_path, message):
+    """把当前改动提交到任务分支，返回提交 sha；没有改动时返回当前 HEAD。"""
+    _git(["add", "-A"], worktree_path)
+    committed = _git(["-c", "commit.gpgsign=false", "commit", "-m", message], worktree_path)
+    head = _git(["rev-parse", "HEAD"], worktree_path)
+    if committed.returncode == 0:
+        return head.stdout.strip()
+    status = _git(["status", "--porcelain"], worktree_path)
+    if status.stdout.strip() == "" and head.returncode == 0:
+        return head.stdout.strip()
+    detail = (committed.stderr or committed.stdout or "").strip()
+    raise WorktreeError(f"提交任务分支失败：{detail}", reason="commit_failed")
+
+
 def ensure_worktree(project_root, task_id, base_ref, worktrees_dir, data_dir=None):
     """返回 worktree 路径；目录已存在则复用，否则新建分支与 workspace。
 

@@ -303,11 +303,21 @@ class Daemon:
     def _run_attempt(self, task_id, attempt_no):
         attempt_dir = os.path.join(self.attempts_dir, task_id, str(attempt_no))
 
+        current = self.repo.get_task(task_id)
+        dependencies = (current or {}).get("blocked_by") or []
+        try:
+            base_commit = worktree.resolve_chain_base(
+                self.project_root, self.base_ref, dependencies
+            )
+        except worktree.WorktreeError as exc:
+            self._fail(task_id, attempt_no, exc.reason, str(exc))
+            return
+
         try:
             worktree_path = worktree.ensure_worktree(
                 self.project_root,
                 task_id,
-                self.base_ref,
+                base_commit,
                 self.worktrees_dir,
                 data_dir=self.data_dir,
             )
@@ -317,18 +327,21 @@ class Daemon:
 
         running.write_marker(self.data_dir, task_id, pid=os.getpid())
         try:
-            self._execute_attempt(task_id, attempt_no, attempt_dir, worktree_path)
+            self._execute_attempt(
+                task_id, attempt_no, attempt_dir, worktree_path, base_commit
+            )
         finally:
             # 只清自己的标记：exec/review 子进程会把标记改成自己的 pid 并在退出时删除。
             running.clear_marker(self.data_dir, task_id, pid=os.getpid())
 
-    def _execute_attempt(self, task_id, attempt_no, attempt_dir, worktree_path):
+    def _execute_attempt(self, task_id, attempt_no, attempt_dir, worktree_path, base_commit):
         changed = self.repo.transition(
             task_id,
             [db.STATUS_RUNNING],
             db.STATUS_RUNNING,
             branch=worktree.branch_name(task_id),
             worktree_path=worktree_path,
+            base_commit=base_commit,
         )
         if not changed:
             current = self.repo.get_task(task_id)
@@ -382,8 +395,9 @@ class Daemon:
 
         current = self.repo.get_task(task_id)
         diff_path = os.path.join(attempt_dir, "diff.patch")
+        diff_base = (current or {}).get("base_commit") or self.base_ref
         try:
-            worktree.make_diff(worktree_path, self.base_ref, diff_path)
+            worktree.make_diff(worktree_path, diff_base, diff_path)
             review_result = self.reviewer.review(
                 current, worktree_path, attempt_dir, diff_path, result.report_path, timeout_seconds
             )
@@ -399,6 +413,16 @@ class Daemon:
             return
 
         if review_result.verdict == "pass":
+            # 通过即提交到任务分支：依赖它的卡要能从这个提交起算，人工合并也只需
+            # 沿依赖顺序 fast-forward。提交失败按 failed 处理，不留半提交状态。
+            try:
+                commit_sha = worktree.commit_worktree(
+                    worktree_path, f"bitlink: {current['title']} ({task_id})"
+                )
+            except worktree.WorktreeError as exc:
+                self._fail(task_id, attempt_no, exc.reason, str(exc))
+                return
+
             # verdict、attempt 终态与任务状态迁移同一事务提交：进程在中间被杀
             # 不会留下「attempt passed 但 task 回 ready 再跑一遍」的错位。
             with self.repo.transaction():
@@ -413,10 +437,16 @@ class Daemon:
                     ended_at=db.now_iso(),
                 )
                 changed = self.repo.transition(
-                    task_id, [db.STATUS_REVIEW], db.STATUS_DONE, block_reason=None
+                    task_id,
+                    [db.STATUS_REVIEW],
+                    db.STATUS_DONE,
+                    block_reason=None,
+                    commit_sha=commit_sha,
                 )
             if changed:
-                self.repo.record_event(task_id, "daemon", "done", {"attempt_no": attempt_no})
+                self.repo.record_event(
+                    task_id, "daemon", "done", {"attempt_no": attempt_no, "commit": commit_sha}
+                )
             else:
                 self.repo.record_event(
                     task_id, "daemon", "done_transition_missed", {"attempt_no": attempt_no}

@@ -212,7 +212,11 @@ def cmd_plan(args):
     finally:
         repo.close()
     existing_ids = {task["id"] for task in existing}
-    existing_titles = [task["title"] for task in existing]
+    active_statuses = {db.STATUS_READY, db.STATUS_RUNNING, db.STATUS_REVIEW}
+    # 只有还在队列里的任务才算「别重复建卡」；done 单独告知，cancelled 不参与，
+    # 否则被取消的卡会让规划器以为这件事已经有人做了，直接产出空计划。
+    existing_titles = [task["title"] for task in existing if task["status"] in active_statuses]
+    completed_titles = [task["title"] for task in existing if task["status"] == db.STATUS_DONE]
 
     plan_config = config.get("plan") or {}
     planner = planner_module.Planner(
@@ -231,6 +235,7 @@ def cmd_plan(args):
         plan_config.get("timeout_seconds") or 300,
         existing_ids=existing_ids,
         existing_titles=existing_titles,
+        completed_titles=completed_titles,
     )
     cards = result["cards"]
 
@@ -309,6 +314,8 @@ def cmd_show(args):
     print(f"blocked_by: {task['blocked_by']}")
     print(f"branch: {task['branch']}")
     print(f"worktree: {task['worktree_path']}")
+    print(f"base_commit: {task['base_commit']}")
+    print(f"commit: {task['commit_sha']}")
     print(f"block_reason: {task['block_reason']}")
     print(f"created_at: {task['created_at']}")
     print(f"updated_at: {task['updated_at']}")
@@ -325,7 +332,7 @@ def cmd_show(args):
         print(f"    exec_session={attempt['exec_session_id']} review_session={attempt['review_session_id']}")
         print(f"    events.jsonl={attempt['exec_jsonl_path']}")
         print(f"    report.json={attempt['report_path']}")
-        print(f"    review.json={attempt['review_jsonl_path']}")
+        print(f"    review.jsonl={attempt['review_jsonl_path']}")
         print(f"    review_verdict={attempt['review_verdict']} review_reason={attempt['review_reason']}")
     return EXIT_OK
 

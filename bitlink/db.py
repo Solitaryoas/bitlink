@@ -12,7 +12,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DB_FILENAME = "bitlink.db"
 
 STATUS_READY = "ready"
@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     block_reason TEXT,
     branch TEXT,
     worktree_path TEXT,
+    base_commit TEXT,
+    commit_sha TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -87,7 +89,15 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 _TASK_UPDATE_FIELDS = frozenset(
-    {"block_reason", "branch", "worktree_path", "max_attempts", "timeout_seconds"}
+    {
+        "block_reason",
+        "branch",
+        "worktree_path",
+        "base_commit",
+        "commit_sha",
+        "max_attempts",
+        "timeout_seconds",
+    }
 )
 
 _ATTEMPT_UPDATE_FIELDS = frozenset(
@@ -152,14 +162,25 @@ def connect(data_dir, readonly=False):
 
 
 def migrate(conn):
-    """幂等迁移，`meta.schema_version` 从 1 开始。"""
+    """幂等迁移，`meta.schema_version` 逐版本推进。"""
     conn.executescript(_SCHEMA)
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if row is None:
         conn.execute(
             "INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),)
         )
-    elif int(row["value"]) < SCHEMA_VERSION:
+        return
+    version = int(row["value"])
+    if version < 2:
+        # v2：任务链需要知道每个任务从哪个提交起算、通过后落在哪个提交
+        columns = {
+            column["name"]
+            for column in conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        for column in ("base_commit", "commit_sha"):
+            if column not in columns:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
+    if version < SCHEMA_VERSION:
         conn.execute(
             "UPDATE meta SET value = ? WHERE key = 'schema_version'", (str(SCHEMA_VERSION),)
         )
@@ -339,6 +360,22 @@ class Repository:
                 f"UPDATE attempts SET {assignments} WHERE task_id = ? AND attempt_no = ?",
                 params,
             )
+
+    def set_task_fields(self, task_id, **fields):
+        """不校验状态地更新任务字段；只给 daemon 在 running 内记录派生信息用。"""
+        unknown = set(fields) - _TASK_UPDATE_FIELDS
+        if unknown:
+            raise ValueError(f"不允许更新字段：{sorted(unknown)}")
+        if not fields:
+            return False
+        assignments = ", ".join(f"{key} = ?" for key in fields)
+        params = list(fields.values())
+        with self._lock:
+            cursor = self.conn.execute(
+                f"UPDATE tasks SET {assignments}, updated_at = ? WHERE id = ?",
+                [*params, now_iso(), task_id],
+            )
+        return cursor.rowcount == 1
 
     def record_event(self, task_id, actor, event_type, payload=None):
         with self._lock:

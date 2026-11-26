@@ -153,6 +153,17 @@ class reviewTest(unittest.TestCase):
         self.assertEqual(result.verdict, "reject")
         self.assertIn("review_output_invalid", result.reason)
 
+    def test_broken_json_with_unescaped_quotes_still_yields_verdict(self):
+        """模型在 reason 里直接写双引号时 JSON 会坏掉，不能因此白烧一次尝试。"""
+        body = (
+            '{"verdict":"pass","reason":"补丁里写了 {"tasks": []} 这种字面量，'
+            '与断言一致","findings":[]}'
+        )
+        reviewer = self.make_reviewer(FAKE_REVIEW_JSON=body)
+        result = self.run_review(reviewer)
+        self.assertEqual(result.verdict, "pass")
+        self.assertIn("review_output_repaired", result.reason)
+
     def test_skips_echoed_task_card_and_takes_verdict_object(self):
         echoed = json.dumps({"id": "task1", "title": "改 README"})
         body = json.dumps({"verdict": "pass", "reason": "ok", "findings": []})

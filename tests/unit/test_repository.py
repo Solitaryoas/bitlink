@@ -36,12 +36,56 @@ class RepositoryTest(unittest.TestCase):
         self.repo.close()
         self._tmp.cleanup()
 
-    def test_schema_version_is_one(self):
+    def test_schema_version_is_current(self):
         row = self.repo.conn.execute(
             "SELECT value FROM meta WHERE key = 'schema_version'"
         ).fetchone()
         self.assertIsNotNone(row)
-        self.assertEqual(row["value"], "1")
+        self.assertEqual(row["value"], str(db.SCHEMA_VERSION))
+
+    def test_migration_from_v1_adds_chain_columns(self):
+        conn = db.connect(self.data_dir)
+        try:
+            conn.executescript(
+                "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                "DELETE FROM meta WHERE key = 'schema_version';"
+                "INSERT INTO meta(key, value) VALUES('schema_version', '1');"
+            )
+            conn.execute("DROP TABLE tasks")
+            conn.execute(
+                "CREATE TABLE tasks ("
+                "id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL,"
+                "acceptance TEXT NOT NULL, status TEXT NOT NULL,"
+                "blocked_by TEXT NOT NULL DEFAULT '[]',"
+                "attempt_count INTEGER NOT NULL DEFAULT 0,"
+                "max_attempts INTEGER NOT NULL DEFAULT 3, timeout_seconds INTEGER,"
+                "block_reason TEXT, branch TEXT, worktree_path TEXT,"
+                "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            db.migrate(conn)
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+            }
+            version = conn.execute(
+                "SELECT value FROM meta WHERE key = 'schema_version'"
+            ).fetchone()["value"]
+        finally:
+            conn.close()
+        self.assertIn("base_commit", columns)
+        self.assertIn("commit_sha", columns)
+        self.assertEqual(version, str(db.SCHEMA_VERSION))
+
+    def test_set_task_fields_rejects_unknown_column(self):
+        self.repo.create_cards([card("t1")])
+        with self.assertRaises(ValueError):
+            self.repo.set_task_fields("t1", status="done")
+
+    def test_set_task_fields_records_chain_columns(self):
+        self.repo.create_cards([card("t1")])
+        self.assertTrue(self.repo.set_task_fields("t1", base_commit="abc", commit_sha="def"))
+        task = self.repo.get_task("t1")
+        self.assertEqual(task["base_commit"], "abc")
+        self.assertEqual(task["commit_sha"], "def")
 
     def test_create_cards_commits_whole_batch(self):
         ids = self.repo.create_cards([card("t1"), card("t2", blocked_by=["t1"])])

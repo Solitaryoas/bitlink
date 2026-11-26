@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 
 from bitlink.jsonout import find_json_object
@@ -56,10 +57,27 @@ def build_review_prompt(task, worktree_path, diff_path, report_path):
         report_text,
         "逐条核对验收标准，必须基于补丁和报告里的磁盘事实判断；找不到证据就 reject。",
         "如果补丁显示「不可读」或含「内容过长已截断」，说明你看不到完整改动，必须 reject 并在 reason 里说明原因。",
-        '最后一条消息只输出一个 JSON 对象：{"verdict":"pass|reject","reason":"...","findings":[{"severity":"P1","message":"..."}]}。'
+        '最后一条消息只输出一个 JSON 对象：{"verdict":"pass|reject","reason":"...","findings":[{"severity":"P1","message":"..."}]}。',
+        '注意：reason 是 JSON 字符串，里面不能直接写双引号；要引用代码或字段时用单引号或反引号，'
+        '确实需要双引号就写成 \\"。',
         "不要 markdown 围栏，不要额外解释。",
     ]
     return "\n".join(lines)
+
+
+VERDICT_PATTERN = re.compile(r'"verdict"\s*:\s*"?(pass|reject)"?', re.I)
+REASON_PATTERN = re.compile(r'"reason"\s*:\s*"(.*?)"\s*(?:,\s*"findings"|}\s*$)', re.S)
+
+
+def _lenient_review(text):
+    """JSON 被模型写坏时，用正则捞 verdict 与 reason，避免白白浪费一次尝试。"""
+    verdict_match = VERDICT_PATTERN.search(text)
+    if verdict_match is None:
+        return None
+    verdict = verdict_match.group(1).lower()
+    reason_match = REASON_PATTERN.search(text)
+    reason = reason_match.group(1) if reason_match else ""
+    return verdict, reason
 
 
 def _parse_review(review_path, outcome):
@@ -77,14 +95,19 @@ def _parse_review(review_path, outcome):
         return str(item.get("verdict") or "").strip().lower() in VALID_VERDICTS
 
     payload = find_json_object(text, is_review)
-    if payload is None:
-        return "reject", "review_output_invalid: 找不到含 verdict 的 JSON 对象", []
-    verdict = str(payload.get("verdict")).strip().lower()
-    findings = payload.get("findings")
-    if not isinstance(findings, list):
-        findings = []
-    reason = payload.get("reason")
-    return verdict, str(reason or ""), findings
+    if payload is not None:
+        verdict = str(payload.get("verdict")).strip().lower()
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        return verdict, str(payload.get("reason") or ""), findings
+
+    lenient = _lenient_review(text)
+    if lenient is not None:
+        verdict, reason = lenient
+        note = "review_output_repaired: " + reason if reason else "review_output_repaired"
+        return verdict, note[:1000], []
+    return "reject", "review_output_invalid: 找不到含 verdict 的 JSON 对象", []
 
 
 class CodexReviewer:

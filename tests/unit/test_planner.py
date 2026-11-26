@@ -92,6 +92,25 @@ class NormalizePlanTest(unittest.TestCase):
         with self.assertRaises(planner.PlanError):
             planner.normalize_plan(too_many)
 
+    def test_empty_cards_is_reported_as_no_work(self):
+        with self.assertRaises(planner.PlanError) as ctx:
+            planner.normalize_plan({"cards": []})
+        self.assertIn("没有产出任何卡片", str(ctx.exception))
+
+    def test_prompt_separates_active_and_completed_titles(self):
+        prompt = planner.build_plan_prompt(
+            "加个功能", "共 1 个受控文件：\n- a.py", ["排队中"], completed_titles=["已完成"]
+        )
+        self.assertIn("队列中尚未完成", prompt)
+        self.assertIn("已经完成的任务", prompt)
+        self.assertIn("已完成", prompt)
+
+    def test_acceptance_list_is_joined_instead_of_rejected(self):
+        raw = card("T1")
+        raw["acceptance"] = ["python3 -m unittest discover -s tests", "接口返回 401"]
+        cards, _ = planner.normalize_plan({"cards": [raw]})
+        self.assertEqual(cards[0]["acceptance"], "python3 -m unittest discover -s tests；接口返回 401")
+
     def test_missing_acceptance_is_rejected(self):
         broken = card("T1")
         broken.pop("acceptance")

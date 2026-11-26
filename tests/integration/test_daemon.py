@@ -129,6 +129,40 @@ class DaemonTest(unittest.TestCase):
         with self.assertRaises(config_module.ConfigError):
             instance.run()
 
+    def test_dependent_task_starts_from_dependency_commit(self):
+        """依赖完成后，下游卡的 worktree 必须包含上游改动，diff 只含自己的改动。
+
+        防的回归：worktree 一律从 base_ref 创建，导致每张卡把前置改动重做一遍，
+        review 各自通过但合并时冲突。
+        """
+        self.repo.create_cards([card("A"), card("B", blocked_by=["A"])])
+        observed = {}
+
+        def on_run(task, worktree_path, attempt_dir):
+            with open(
+                os.path.join(worktree_path, f"{task['id']}.txt"), "w", encoding="utf-8"
+            ) as handle:
+                handle.write("x\n")
+            if task["id"] == "B":
+                observed["sees_a"] = os.path.isfile(os.path.join(worktree_path, "A.txt"))
+
+        executor = FakeExecutor(on_run=on_run)
+        self.make_daemon(executor, max_iterations=3).run()
+
+        first = self.repo.get_task("A")
+        second = self.repo.get_task("B")
+        self.assertEqual(first["status"], "done")
+        self.assertEqual(second["status"], "done")
+        self.assertTrue(first["commit_sha"])
+        self.assertEqual(second["base_commit"], first["commit_sha"])
+        self.assertTrue(observed["sees_a"])
+
+        diff_path = os.path.join(self.data_dir, "attempts", "B", "1", "diff.patch")
+        with open(diff_path, "r", encoding="utf-8", errors="replace") as handle:
+            patch = handle.read()
+        self.assertIn("B.txt", patch)
+        self.assertNotIn("A.txt", patch)
+
     def test_ac2_dependent_task_waits_for_prerequisite(self):
         self.repo.create_cards([card("A", blocked_by=["B"]), card("B")])
         executor = FakeExecutor()

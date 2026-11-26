@@ -65,6 +65,40 @@ class WorktreeTest(unittest.TestCase):
         self.assertIn("answer.txt", patch)
         self.assertIn("+42", patch)
 
+    def test_chain_base_prefers_dependency_tip(self):
+        first = worktree.ensure_worktree(
+            self.repo_path, "A", self.base_ref, self.worktrees_dir
+        )
+        with open(os.path.join(first, "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("a\n")
+        sha = worktree.commit_worktree(first, "task A")
+        self.assertEqual(len(sha), 40)
+
+        base = worktree.resolve_chain_base(self.repo_path, self.base_ref, ["A"])
+        self.assertEqual(base, sha)
+
+        second = worktree.ensure_worktree(self.repo_path, "B", base, self.worktrees_dir)
+        self.assertTrue(os.path.isfile(os.path.join(second, "a.txt")))
+
+    def test_diverged_dependencies_raise(self):
+        for task_id in ("A", "B"):
+            path = worktree.ensure_worktree(
+                self.repo_path, task_id, self.base_ref, self.worktrees_dir
+            )
+            with open(os.path.join(path, f"{task_id}.txt"), "w", encoding="utf-8") as handle:
+                handle.write("x\n")
+            worktree.commit_worktree(path, f"task {task_id}")
+        with self.assertRaises(worktree.WorktreeError) as ctx:
+            worktree.resolve_chain_base(self.repo_path, self.base_ref, ["A", "B"])
+        self.assertEqual(ctx.exception.reason, "chain_diverged")
+
+    def test_commit_worktree_without_changes_returns_head(self):
+        path = worktree.ensure_worktree(
+            self.repo_path, "task1", self.base_ref, self.worktrees_dir
+        )
+        head = git(path, "rev-parse", "HEAD").stdout.strip()
+        self.assertEqual(worktree.commit_worktree(path, "empty"), head)
+
     def test_remove_worktree_cleans_directory_and_keeps_branch(self):
         path = worktree.ensure_worktree(
             self.repo_path, "task1", self.base_ref, self.worktrees_dir

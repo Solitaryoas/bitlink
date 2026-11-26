@@ -59,7 +59,7 @@ def _read_agents(project_root):
         return None
 
 
-def build_plan_prompt(request, facts, existing_titles=(), agents_text=None):
+def build_plan_prompt(request, facts, existing_titles=(), agents_text=None, completed_titles=()):
     lines = [
         "你是 BitLink 的规划器。把下面这段需求拆成若干张可独立执行的任务卡。",
         "你只做规划：不要修改任何文件，不要执行 git 命令，不要尝试运行测试。",
@@ -70,12 +70,15 @@ def build_plan_prompt(request, facts, existing_titles=(), agents_text=None):
         "## 仓库现状（受版本控制的文件清单）",
         facts,
         "",
-        "## 已在队列中的任务（避免重复造一张同样的卡）",
+        "## 队列中尚未完成的任务（不要重复造一张同样的卡）",
     ]
     if existing_titles:
         lines.extend(f"- {title}" for title in existing_titles)
     else:
-        lines.append("- （队列为空）")
+        lines.append("- （无）")
+    if completed_titles:
+        lines += ["", "## 已经完成的任务（这些能力已经存在，不要重做）"]
+        lines.extend(f"- {title}" for title in completed_titles)
     if agents_text:
         lines += ["", "## 项目约定（AGENTS.md）", agents_text]
     lines += [
@@ -95,6 +98,15 @@ def build_plan_prompt(request, facts, existing_titles=(), agents_text=None):
     return "\n".join(lines)
 
 
+def _flatten_text(value, sep):
+    """模型经常把一条标准拆成数组；按分隔符拼回字符串，不丢信息。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return sep.join(item.strip() for item in value if item.strip())
+    return value
+
+
 def _pick_key(raw, index):
     for field in ("key", "id"):
         value = raw.get(field)
@@ -106,7 +118,12 @@ def _pick_key(raw, index):
 def normalize_plan(payload, existing_ids=()):
     """把模型输出转成 cards.parse_cards 能接受的卡片，返回 (cards, warnings)。"""
     cards = payload.get("cards") if isinstance(payload, dict) else None
-    if not isinstance(cards, list) or not cards:
+    if isinstance(cards, list) and not cards:
+        raise PlanError(
+            "规划器没有产出任何卡片。若这些事已经做完，不用再建卡；"
+            "若确实需要改动，把需求写得更具体后重试。"
+        )
+    if not isinstance(cards, list):
         raise PlanError("规划输出缺少 cards 数组")
     if len(cards) > MAX_CARDS:
         raise PlanError(f"规划输出了 {len(cards)} 张卡，超过上限 {MAX_CARDS}")
@@ -139,6 +156,9 @@ def normalize_plan(payload, existing_ids=()):
 
         item = {field: raw[field] for field in PLANNER_FIELDS if field in raw}
         item["id"] = key_to_id[key]
+        for field, sep in (("acceptance", "；"), ("description", "\n"), ("title", " ")):
+            if field in item:
+                item[field] = _flatten_text(item[field], sep)
 
         dependencies = raw.get("blocked_by") or []
         if not isinstance(dependencies, list):
@@ -202,13 +222,24 @@ class Planner:
         command.append(prompt)
         return command
 
-    def plan(self, request, out_path, raw_path, timeout_seconds, existing_ids=(), existing_titles=()):
+    def plan(
+        self,
+        request,
+        out_path,
+        raw_path,
+        timeout_seconds,
+        existing_ids=(),
+        existing_titles=(),
+        completed_titles=(),
+    ):
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         jsonl_path = os.path.splitext(raw_path)[0] + ".jsonl"
         stderr_path = os.path.splitext(raw_path)[0] + ".stderr.log"
 
         facts = collect_facts(self.project_root)
-        prompt = build_plan_prompt(request, facts, existing_titles, _read_agents(self.project_root))
+        prompt = build_plan_prompt(
+            request, facts, existing_titles, _read_agents(self.project_root), completed_titles
+        )
         command = self.build_command(self.project_root, raw_path, prompt)
         outcome = run_process(command, jsonl_path, stderr_path, timeout_seconds, env=self.env, cwd=self.project_root)
         if outcome.timed_out:
